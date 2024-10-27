@@ -19,7 +19,7 @@ contract BondingCurveManager is Ownable, BancorFormula {
     address[] public tokenList;
     
     uint256 private constant FEE_PERCENTAGE = 100; // 1% in basis points
-    uint32 private constant CONNECTOR_WEIGHT = 800000; // 70% in ppm
+    uint32 private constant CONNECTOR_WEIGHT = 700000; // 70% in ppm
     uint256 private constant MAX_POOL_BALANCE = 2500 ether;
     uint256 private constant MINIMUM_CREATION_FEE = 1 ether; // Fee to create a new token
     uint256 private constant LP_FEE_PERCENTAGE = 500; // 5% in basis points
