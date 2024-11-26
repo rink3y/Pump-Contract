@@ -31,7 +31,7 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
 
     uint256 private constant FEE_PERCENTAGE = 1e16; // 1% = 1e16
     uint256 private LP_FEE_PERCENTAGE = 5e16; // 5% = 5e16
-    uint256 private constant MAX_POOL_BALANCE = 1 ether;
+    uint256 private constant MAX_POOL_BALANCE = 2500 ether;
 
     address private immutable LP_BURN_ADDR = 0x000000000000000000000000000000000000dEaD;
     address payable private feeRecipient;
