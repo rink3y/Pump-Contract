@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
+//https://github.com/PaulRBerg/prb-math/blob/v2.5.0
+
 pragma solidity ^0.8.26;
 
 import "./BancorFormula.sol";
-import "@prb/math/contracts/PRBMathSD59x18.sol";
-import "@prb/math/contracts/PRBMathUD60x18.sol";
+import "./math/PRBMathSD59x18.sol"; 
+import "./math/PRBMathUD60x18.sol";
+
 
 // based on https://medium.com/relevant-community/bonding-curves-in-depth-intuition-parametrization-d3905a681e0a
 contract BancorBondingCurve is BancorFormula {

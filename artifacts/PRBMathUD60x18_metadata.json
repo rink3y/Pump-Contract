@@ -1,0 +1,73 @@
+{
+	"compiler": {
+		"version": "0.8.30+commit.73712a01"
+	},
+	"language": "Solidity",
+	"output": {
+		"abi": [],
+		"devdoc": {
+			"author": "Paul Razvan Berg",
+			"kind": "dev",
+			"methods": {},
+			"stateVariables": {
+				"HALF_SCALE": {
+					"details": "Half the SCALE number."
+				},
+				"LOG2_E": {
+					"details": "log2(e) as an unsigned 60.18-decimal fixed-point number."
+				},
+				"MAX_UD60x18": {
+					"details": "The maximum value an unsigned 60.18-decimal fixed-point number can have."
+				},
+				"MAX_WHOLE_UD60x18": {
+					"details": "The maximum whole value an unsigned 60.18-decimal fixed-point number can have."
+				},
+				"SCALE": {
+					"details": "How many trailing decimals can be represented."
+				}
+			},
+			"title": "PRBMathUD60x18",
+			"version": 1
+		},
+		"userdoc": {
+			"kind": "user",
+			"methods": {},
+			"notice": "Smart contract library for advanced fixed-point math that works with uint256 numbers considered to have 18 trailing decimals. We call this number representation unsigned 60.18-decimal fixed-point, since there can be up to 60 digits in the integer part and up to 18 decimals in the fractional part. The numbers are bound by the minimum and the maximum values permitted by the Solidity type uint256.",
+			"version": 1
+		}
+	},
+	"settings": {
+		"compilationTarget": {
+			"gate/math/PRBMathUD60x18.sol": "PRBMathUD60x18"
+		},
+		"evmVersion": "prague",
+		"libraries": {},
+		"metadata": {
+			"bytecodeHash": "ipfs"
+		},
+		"optimizer": {
+			"enabled": false,
+			"runs": 200
+		},
+		"remappings": []
+	},
+	"sources": {
+		"gate/math/PRBMath.sol": {
+			"keccak256": "0xfbc6ad00d7bcc816a632a1804c9ca0b8208da2f92738ebaba9d2690cccf5bacb",
+			"license": "Unlicense",
+			"urls": [
+				"bzz-raw://f3a71e1ef13c8446a14775a7782b85d8cb29a49ad1d46b8897297248dbcc8140",
+				"dweb:/ipfs/QmfFMGPrfdiNviEXKWiMvfK4587VbKyfdg6VDUXw4wKxme"
+			]
+		},
+		"gate/math/PRBMathUD60x18.sol": {
+			"keccak256": "0x1b9d42c79e8ce067571eb13a9784e69221746832e857ec62d27a9461cc09f60b",
+			"license": "Unlicense",
+			"urls": [
+				"bzz-raw://2e1bea82fee21df3be62bf6e4f0a7d8daf8ac2af6089929f4d57cf4442039ee9",
+				"dweb:/ipfs/QmZbjMpmzdeaxzLdCzLCfDSBX9GtK579QMvgSwhpZpkPon"
+			]
+		}
+	},
+	"version": 1
+}
