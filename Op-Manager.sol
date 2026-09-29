@@ -5,7 +5,9 @@ import {BancorBondingCurve} from "./gate/BancorBondingCurve.sol";
 import "./BondingCurveToken.sol";
 import "./utils/owner/Ownable.sol";
 import "./Interface/IUniswapV2Router02.sol";
-// import "./Interface/IUniswapV2Factory.sol";
+import "./Interface/IUniswapV2Factory.sol";
+import "./Interface/IUniswapV2Pair.sol";
+import "./Interface/IWETH.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /**
@@ -13,14 +15,16 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
  * @dev Manages bonding curve tokens, allowing creation, buying, selling, and liquidity management.
  */
 contract BondingCurveManager is Ownable, ReentrancyGuard {
-    BancorBondingCurve private bancorFormula;
+    BancorBondingCurve private immutable bancorFormula;
 
     IUniswapV2Router02 private immutable uniRouter;
-    // IUniswapV2Factory private immutable uniFactory;
+    IUniswapV2Factory private immutable uniFactory;
+    IWETH private immutable weth;
 
 
     struct TokenInfo {
         BondingCurveToken token;
+        address deployer;
         uint256 tokenbalance;
         uint256 ethBalance;
         bool isListed;
@@ -32,6 +36,7 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
     uint256 private constant FEE_PERCENTAGE = 1e16; // 1% = 1e16
     uint256 private LP_FEE_PERCENTAGE = 5e16; // 5% = 5e16
     uint256 private constant MAX_POOL_BALANCE = 2500 ether;
+    uint256 private constant ninetyNinePercent = (MAX_POOL_BALANCE * 99) / 100;
 
     address private immutable LP_BURN_ADDR = 0x000000000000000000000000000000000000dEaD;
     address payable private feeRecipient;
@@ -54,21 +59,23 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
     error InvalidRecipient();
     error InvalidLpFeePercentage();
     error PairCreationFailed();
+    error SlippageExceeded();
 
     /**
      * @dev Constructor initializes the contract with the Uniswap router, BancorFormula1 address, and fee recipient.
+     * The Uniswap factory and WETH addresses are read from the router.
      * @param _uniRouter Address of the Uniswap V2 Router.
      * @param _bancorFormula Address of the deployed BancorFormula1 contract.
      * @param _feeRecipient Address to receive the fees.
      */
     constructor(
         address _uniRouter,
-        // address _uniFactory,
         address _bancorFormula,
         address payable _feeRecipient
     ) {
         uniRouter = IUniswapV2Router02(_uniRouter);
-        // uniFactory = IUniswapV2Factory(_uniFactory);
+        uniFactory = IUniswapV2Factory(IUniswapV2Router02(_uniRouter).factory());
+        weth = IWETH(IUniswapV2Router02(_uniRouter).WETH());
         bancorFormula = BancorBondingCurve(_bancorFormula);
         feeRecipient = _feeRecipient;
     }
@@ -84,6 +91,7 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
 
         tokens[tokenAddress] = TokenInfo({
             token: newToken,
+            deployer: msg.sender,
             tokenbalance: 0,
             ethBalance: 0,
             isListed: false
@@ -100,14 +108,10 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
 
         emit TokenCreated(tokenAddress, msg.sender, name, symbol);
 
-        // // Create a Uniswap pair for the new token and weth
-        // address pair = uniFactory.createPair(tokenAddress, uniRouter.WETH());
-        // if (pair == address(0)) revert PairCreationFailed();
-
-
-        // If ETH is sent during token creation, buy tokens on behalf of the creator
+        // If ETH is sent during token creation, buy tokens on behalf of the creator.
+        // Same rules as buy(); no slippage limit is needed since nobody can trade before it.
         if (msg.value > 0) {
-            buyTokenForCreator(tokenAddress, msg.value);
+            _buy(tokenAddress, msg.value, 0);
         }
     }
 
@@ -115,79 +119,25 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
     /**
      * @notice Buys tokens for a specified token address.
      * @param tokenAddress The address of the token to buy.
+     * @param minTokensOut The minimum amount of tokens to receive, otherwise the buy reverts.
      */
-    function buy(address tokenAddress) external payable nonReentrant {
+    function buy(address tokenAddress, uint256 minTokensOut) external payable nonReentrant {
         TokenInfo storage tokenInfo = tokens[tokenAddress];
-        BondingCurveToken token = tokenInfo.token;
 
-        if (address(token) == address(0)) revert TokenDoesNotExist();
+        if (address(tokenInfo.token) == address(0)) revert TokenDoesNotExist();
         if (tokenInfo.isListed) revert TokenAlreadyListed();
         if (msg.value == 0) revert ZeroEthSent();
 
-        uint256 currentEthBalance = tokenInfo.ethBalance;
-        uint256 remainingEthToMax = MAX_POOL_BALANCE > currentEthBalance ? MAX_POOL_BALANCE - currentEthBalance : 0;
-        if (remainingEthToMax == 0) revert MaxPoolBalanceReached();
-
-        uint256 availableTokens = tokenInfo.tokenbalance;
-        uint256 totalSupply = token.TRADING_SUPPLY() - availableTokens;
-
-        uint256 feeDenominator = 1e18 - FEE_PERCENTAGE;
-        uint256 maxActualEthContribution = (remainingEthToMax * 1e18) / feeDenominator;
-
-        uint256 actualEthContribution = msg.value > maxActualEthContribution ? maxActualEthContribution : msg.value;
-
-        // Calculate fee and ETH to be used for purchasing tokens
-        uint256 fee = calculateFee(actualEthContribution, FEE_PERCENTAGE);
-        uint256 ethForTokens = actualEthContribution - fee;
-
-        // Calculate the number of tokens the user can buy with ethForTokens
-        uint256 tokensToTransfer = bancorFormula.computeMintingAmountFromPrice(currentEthBalance, totalSupply, ethForTokens);
-
-        // If tokensToTransfer exceeds availableTokens, adjust tokensToTransfer without recalculating fee and ethForTokens
-        if (tokensToTransfer > availableTokens) {
-            tokensToTransfer = availableTokens;
-            // Calculate ethForTokens based on tokensToTransfer without recalculating
-            ethForTokens = bancorFormula.computePriceForMinting(currentEthBalance, totalSupply, tokensToTransfer);
-            fee = calculateFee(ethForTokens, FEE_PERCENTAGE);
-            actualEthContribution = ethForTokens + fee;
-        }
-
-        // Update balances
-        tokenInfo.ethBalance = currentEthBalance + ethForTokens;
-        tokenInfo.tokenbalance -= tokensToTransfer;
-
-        // Transfer fee to feeRecipient
-        if (fee > 0) {
-            (bool feeSent, ) = feeRecipient.call{value: fee}("");
-            if (!feeSent) revert FailedToSendEth();
-        }
-
-        // Transfer tokens to buyer
-        if (!token.transfer(msg.sender, tokensToTransfer)) {
-            revert TokenTransferFailed();
-        }
-
-        // Refund excess ETH if any
-        uint256 excessEth = msg.value > actualEthContribution ? msg.value - actualEthContribution : 0;
-        if (excessEth > 0) {
-            (bool sent, ) = msg.sender.call{value: excessEth}("");
-            if (!sent) revert FailedToSendEth();
-        }
-
-        emit TokensBought(tokenAddress, msg.sender, ethForTokens, tokensToTransfer);
-
-        // **New Liquidity Check Using Internal Function**
-        if (shouldAddLiquidity(tokenInfo)) {
-            _addLiquidity(tokenAddress);
-        }
+        _buy(tokenAddress, msg.value, minTokensOut);
     }
 
     /**
      * @notice Sells tokens for a specified token address.
      * @param tokenAddress The address of the token to sell.
      * @param tokenAmount The amount of tokens to sell.
+     * @param minEthOut The minimum amount of ETH to receive after fees, otherwise the sell reverts.
      */
-    function sell(address tokenAddress, uint256 tokenAmount) external nonReentrant {
+    function sell(address tokenAddress, uint256 tokenAmount, uint256 minEthOut) external nonReentrant {
         TokenInfo storage tokenInfo = tokens[tokenAddress];
         BondingCurveToken token = tokenInfo.token;
 
@@ -204,6 +154,7 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
         uint256 ethAfterFee = ethToReturn - fee;
 
         if (currentEthBalance < ethToReturn) revert InsufficientPoolbalance();
+        if (ethAfterFee < minEthOut) revert SlippageExceeded();
         unchecked {
             tokenInfo.ethBalance -= ethToReturn;
             tokenInfo.tokenbalance += tokenAmount;
@@ -225,54 +176,80 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Buys tokens on behalf of the creator during token creation.
+     * @dev Shared buy logic for buy() and the creator's buy in create().
+     * Buys stop at 99% of MAX_POOL_BALANCE, excess ETH is refunded to msg.sender,
+     * and the token migrates to the DEX once the curve is complete.
      * @param tokenAddress The address of the token.
      * @param ethAmount The amount of ETH sent.
+     * @param minTokensOut The minimum amount of tokens to receive.
      */
-    function buyTokenForCreator(address tokenAddress, uint256 ethAmount) internal {
+    function _buy(address tokenAddress, uint256 ethAmount, uint256 minTokensOut) internal {
         TokenInfo storage tokenInfo = tokens[tokenAddress];
         BondingCurveToken token = tokenInfo.token;
 
         uint256 currentEthBalance = tokenInfo.ethBalance;
-        uint256 availableTokens = tokenInfo.tokenbalance;
-        uint256 totalSupply = token.TRADING_SUPPLY() - availableTokens;
-        uint256 fee = calculateFee(ethAmount, FEE_PERCENTAGE);
-        uint256 ethForTokens = ethAmount - fee;
+        uint256 actualEthContribution;
+        {
+            uint256 remainingEthToMax = ninetyNinePercent > currentEthBalance ? ninetyNinePercent - currentEthBalance : 0;
+            if (remainingEthToMax == 0) revert MaxPoolBalanceReached();
 
-        uint256 tokensToTransfer = bancorFormula.computeMintingAmountFromPrice(currentEthBalance, totalSupply, ethForTokens);
+            uint256 feeDenominator = 1e18 - FEE_PERCENTAGE;
+            uint256 maxActualEthContribution = (remainingEthToMax * 1e18) / feeDenominator;
 
-        // Ensure that the tokens purchased do not exceed of the trading supply
-        if (tokensToTransfer > availableTokens) {
-            tokensToTransfer = availableTokens;
-            ethForTokens = bancorFormula.computePriceForMinting(
-                currentEthBalance,
-                totalSupply,
-                tokensToTransfer
-            );
-            fee = calculateFee(ethForTokens, FEE_PERCENTAGE);
+            actualEthContribution = ethAmount > maxActualEthContribution ? maxActualEthContribution : ethAmount;
         }
 
+        uint256 availableTokens = tokenInfo.tokenbalance;
+        uint256 totalSupply = token.TRADING_SUPPLY() - availableTokens;
 
-        // Update token eth balance/pool
-        tokenInfo.ethBalance += ethForTokens;
+        // Calculate fee and ETH to be used for purchasing tokens
+        uint256 fee = calculateFee(actualEthContribution, FEE_PERCENTAGE);
+        uint256 ethForTokens = actualEthContribution - fee;
+
+        // Calculate the number of tokens the user can buy with ethForTokens
+        uint256 tokensToTransfer = bancorFormula.computeMintingAmountFromPrice(currentEthBalance, totalSupply, ethForTokens);
+
+        // If tokensToTransfer exceeds availableTokens, charge only for the tokens that are left
+        if (tokensToTransfer > availableTokens) {
+            tokensToTransfer = availableTokens;
+            uint256 priceForRemaining = bancorFormula.computePriceForMinting(currentEthBalance, totalSupply, tokensToTransfer);
+            // Never charge more than the ETH that was actually sent (can only differ by rounding)
+            if (priceForRemaining < ethForTokens) {
+                ethForTokens = priceForRemaining;
+                fee = calculateFee(ethForTokens, FEE_PERCENTAGE);
+                actualEthContribution = ethForTokens + fee;
+            }
+        }
+
+        if (tokensToTransfer < minTokensOut) revert SlippageExceeded();
+
+        // Update balances
+        tokenInfo.ethBalance = currentEthBalance + ethForTokens;
         tokenInfo.tokenbalance -= tokensToTransfer;
 
+        // Transfer fee to feeRecipient
         if (fee > 0) {
             (bool feeSent, ) = feeRecipient.call{value: fee}("");
             if (!feeSent) revert FailedToSendEth();
         }
 
+        // Transfer tokens to buyer
         if (!token.transfer(msg.sender, tokensToTransfer)) {
             revert TokenTransferFailed();
         }
 
-        uint256 excessEth = ethAmount > ethForTokens + fee ? ethAmount - (ethForTokens + fee) : 0;
+        // Refund excess ETH if any
+        uint256 excessEth = ethAmount > actualEthContribution ? ethAmount - actualEthContribution : 0;
         if (excessEth > 0) {
             (bool sent, ) = msg.sender.call{value: excessEth}("");
             if (!sent) revert FailedToSendEth();
         }
 
         emit TokensBought(tokenAddress, msg.sender, ethForTokens, tokensToTransfer);
+
+        if (shouldAddLiquidity(tokenInfo)) {
+            _addLiquidity(tokenAddress);
+        }
     }
 
     function _addLiquidity(address tokenAddress) internal {
@@ -299,17 +276,31 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
             if (!feeSent) revert FailedToSendEth();
         }
 
-        token.approve(address(uniRouter), tokensForLiquidity);
+        // Unlock transfers so the tokens can move into the pair and trade freely from now on
+        token.enableTransfers();
 
-        // Add liquidity to Uniswap
-        (uint256 amountToken, uint256 amountETH, ) = uniRouter.addLiquidityETH{value: ethForLiquidity}(
-            tokenAddress,
-            tokensForLiquidity,
-            0, 
-            0,
-            LP_BURN_ADDR, 
-            block.timestamp
-        );
+        // Add liquidity directly to the pair instead of through the router. The router reverts
+        // if someone has donated WETH to the pair beforehand, which would block migration forever.
+        // Token transfers were locked until now, so nobody can have minted LP in this pair.
+        address pair = uniFactory.getPair(tokenAddress, address(weth));
+        if (pair == address(0)) {
+            pair = uniFactory.createPair(tokenAddress, address(weth));
+            if (pair == address(0)) revert PairCreationFailed();
+        }
+
+        weth.deposit{value: ethForLiquidity}();
+        if (!weth.transfer(pair, ethForLiquidity)) revert TokenTransferFailed();
+        if (!token.transfer(pair, tokensForLiquidity)) revert TokenTransferFailed();
+        IUniswapV2Pair(pair).mint(LP_BURN_ADDR);
+
+        uint256 amountToken = tokensForLiquidity;
+        uint256 amountETH = ethForLiquidity;
+
+        // Any tokens left in the manager for this token (e.g. sent here by mistake) go to the deployer
+        uint256 leftoverTokens = token.balanceOf(address(this));
+        if (leftoverTokens > 0) {
+            if (!token.transfer(tokenInfo.deployer, leftoverTokens)) revert TokenTransferFailed();
+        }
 
         token.renounceOwnership();
 
@@ -363,17 +354,12 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
     }
 
 
-    function setBancorFormula(address _bancorFormula) external onlyOwner {
-        bancorFormula = BancorBondingCurve(_bancorFormula);
-    }
-
     /**
     * @dev Checks if liquidity should be added based on token balance or ETH balance.
     * @param tokenInfo The TokenInfo struct containing token details.
     * @return True if tokenbalance is zero or ethBalance is >= 99% of MAX_POOL_BALANCE, else false.
     */
     function shouldAddLiquidity(TokenInfo storage tokenInfo) internal view returns (bool) {
-        uint256 ninetyNinePercent = (MAX_POOL_BALANCE * 99) / 100;
         return (tokenInfo.tokenbalance == 0 || tokenInfo.ethBalance >= ninetyNinePercent);
     }
 
@@ -496,9 +482,4 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
     ) internal pure returns (uint256) {
         return (_amount * _feePercent) / 1e18;
     }
-
-    /**
-     * @notice Fallback function to accept ETH.
-     */
-    receive() external payable {}
 }
