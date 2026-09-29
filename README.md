@@ -2,7 +2,7 @@
 
 ## Breaking changes for integrators (UI/scripts)
 
-The latest version of `BondingCurveManager` (`Op-Manager.sol`) changes how the contract is called. Any UI or script built against the previous version must be updated before it is pointed at a new deployment:
+The latest version of `BondingCurveManager` (`Op-Manager.sol`) changes how the contract is called. Any UI or script built against the previous version, including [Pump-ui](https://github.com/rink3y/Pump-ui), must be updated before it is pointed at a new deployment:
 
 - `buy(token, minTokensOut)`: reverts with `SlippageExceeded` if fewer tokens would be received.
 - `sell(token, amount, minEthOut)`: reverts with `SlippageExceeded` if less ETH would be received.
