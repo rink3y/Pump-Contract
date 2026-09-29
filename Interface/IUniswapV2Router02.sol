@@ -11,5 +11,7 @@ interface IUniswapV2Router02 {
         uint deadline
     ) external payable returns (uint amountToken, uint amountETH, uint liquidity);
 
+    function factory() external pure returns (address);
+
     function WETH() external view returns (address);
 }

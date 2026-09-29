@@ -39,8 +39,16 @@ contract BancorBondingCurve is BancorFormula {
             uint256 m = slope;
             return computeP(k, r, m);
         }
-        // Use Bancor's sale return calculation when supply is non-zero
-        return calculateSaleReturn(supply + k, b, reserveRatio, k);
+        if (k == 0) {
+            return 0;
+        }
+        // Cost to move the curve from `supply` to `supply + k`:
+        // p = b * ((supply + k) / supply) ^ (1 / r) - b
+        // Uses PRBMath like computeP: Bancor's power() loses accuracy when supply grows by a large factor
+        uint256 growth = (supply + k).div(supply).pow((1e18 * uint256(MAX_WEIGHT)) / reserveRatio);
+        p = b.mul(growth) - b;
+        // Fixed-point rounding can go either way, so add a tiny margin to never undercharge the buyer
+        p += p / 1e12 + 1;
     }
 
     /**
