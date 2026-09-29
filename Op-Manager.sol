@@ -202,14 +202,11 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
         uint256 availableTokens = tokenInfo.tokenbalance;
         uint256 totalSupply = token.TRADING_SUPPLY() - availableTokens;
 
-        // Calculate fee and ETH to be used for purchasing tokens
         uint256 fee = calculateFee(actualEthContribution, FEE_PERCENTAGE);
         uint256 ethForTokens = actualEthContribution - fee;
 
-        // Calculate the number of tokens the user can buy with ethForTokens
         uint256 tokensToTransfer = bancorFormula.computeMintingAmountFromPrice(currentEthBalance, totalSupply, ethForTokens);
 
-        // If tokensToTransfer exceeds availableTokens, charge only for the tokens that are left
         if (tokensToTransfer > availableTokens) {
             tokensToTransfer = availableTokens;
             uint256 priceForRemaining = bancorFormula.computePriceForMinting(currentEthBalance, totalSupply, tokensToTransfer);
@@ -223,22 +220,18 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
 
         if (tokensToTransfer < minTokensOut) revert SlippageExceeded();
 
-        // Update balances
         tokenInfo.ethBalance = currentEthBalance + ethForTokens;
         tokenInfo.tokenbalance -= tokensToTransfer;
 
-        // Transfer fee to feeRecipient
         if (fee > 0) {
             (bool feeSent, ) = feeRecipient.call{value: fee}("");
             if (!feeSent) revert FailedToSendEth();
         }
 
-        // Transfer tokens to buyer
         if (!token.transfer(msg.sender, tokensToTransfer)) {
             revert TokenTransferFailed();
         }
 
-        // Refund excess ETH if any
         uint256 excessEth = ethAmount > actualEthContribution ? ethAmount - actualEthContribution : 0;
         if (excessEth > 0) {
             (bool sent, ) = msg.sender.call{value: excessEth}("");
@@ -276,12 +269,8 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
             if (!feeSent) revert FailedToSendEth();
         }
 
-        // Unlock transfers so the tokens can move into the pair and trade freely from now on
         token.enableTransfers();
 
-        // Add liquidity directly to the pair instead of through the router. The router reverts
-        // if someone has donated WETH to the pair beforehand, which would block migration forever.
-        // Token transfers were locked until now, so nobody can have minted LP in this pair.
         address pair = uniFactory.getPair(tokenAddress, address(weth));
         if (pair == address(0)) {
             pair = uniFactory.createPair(tokenAddress, address(weth));
@@ -296,7 +285,6 @@ contract BondingCurveManager is Ownable, ReentrancyGuard {
         uint256 amountToken = tokensForLiquidity;
         uint256 amountETH = ethForLiquidity;
 
-        // Any tokens left in the manager for this token (e.g. sent here by mistake) go to the deployer
         uint256 leftoverTokens = token.balanceOf(address(this));
         if (leftoverTokens > 0) {
             if (!token.transfer(tokenInfo.deployer, leftoverTokens)) revert TokenTransferFailed();
